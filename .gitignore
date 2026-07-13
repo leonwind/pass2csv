@@ -1,0 +1,4 @@
+main
+
+# Any potential output files with encrypted passwords
+**.csv
