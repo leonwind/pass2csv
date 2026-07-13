@@ -8,6 +8,9 @@ use std::path::{Path, PathBuf};
 type Result<T> = std::result::Result<T, Box<dyn Error>>;
 
 const IGNORE_DIRS: &[&str] = &[".git"];
+const IGNORE_FILES: &[&str] = &[".gpg-id", ".gitattributes", "config"];
+
+const DEFAULT_EMAIL: &str = &"foo@bar.com";
 
 
 fn get_dir_name(path: &Path) -> &str {
@@ -16,9 +19,19 @@ fn get_dir_name(path: &Path) -> &str {
                .unwrap_or_default()
 }
 
-fn skip_dir(path: &Path) -> bool {
+fn skip_path(path: &Path) -> bool {
     let dir_name = get_dir_name(path);
-    IGNORE_DIRS.iter().any(|ignored| *ignored == dir_name) 
+    IGNORE_DIRS.iter().any(|ignored| *ignored == dir_name) ||
+        IGNORE_FILES.iter().any(|ignored| *ignored == dir_name)
+}
+
+fn is_email(file_name: &str) -> bool {
+    // On a good-enough basis.
+    let Some((local, domain)) = file_name.split_once('@') else {
+        return false;
+    };
+
+    !local.is_empty() && domain.contains('.') && !domain.starts_with('.') && !domain.ends_with('.')
 }
 
 fn list_all_pass_files(dir: &Path) -> Result<HashMap<PathBuf, Vec<PathBuf>>> {
@@ -29,10 +42,11 @@ fn list_all_pass_files(dir: &Path) -> Result<HashMap<PathBuf, Vec<PathBuf>>> {
         let entry = entry?;
         let path = entry.path();
 
+        if skip_path(&path) {
+            continue;
+        }
+
         if path.is_dir() {
-            if skip_dir(&path) {
-                continue;
-            }
             all_files.extend(list_all_pass_files(&path)?);
         } else {
             files_here.push(path);
@@ -40,27 +54,37 @@ fn list_all_pass_files(dir: &Path) -> Result<HashMap<PathBuf, Vec<PathBuf>>> {
     }
 
     all_files.insert(dir.to_path_buf(), files_here);
-    return Ok(all_files)
+    Ok(all_files)
 }
 
 fn write_to_csv(
         files_by_dir: &HashMap<PathBuf,
         Vec<PathBuf>>, output: &mut fs::File) -> Result<()> {
-    writeln!(output, "Title,Url,Username,Password");
+    writeln!(output, "Title,Url,Username,Password,tags")?;
     
     for (dir, files) in files_by_dir {
-        write_dir_to_csv(dir, files)?;
+        write_dir_to_csv(output, dir, files)?;
     }
 
     Ok(()) 
 }
 
-fn write_dir_to_csv(dir: &PathBuf, files: &Vec<PathBuf>) -> Result<()> {
+fn write_dir_to_csv(output: &mut fs::File, dir: &PathBuf, files: &Vec<PathBuf>) -> Result<()> {
     let dir_name = get_dir_name(dir);
 
     for file in files {
         let file_name = get_dir_name(file);
-        println!("{} @ {}", file_name, dir_name)
+        let file_name = file_name
+            .strip_suffix(".gpg")
+            .ok_or_else(|| format!("'{}' has no .gpg end", file_name))?;
+        println!("{} @ {}", file_name, dir_name);
+
+        let (email, title) = match is_email(file_name) {
+            true => (file_name, dir_name),
+            false => (DEFAULT_EMAIL, dir_name)
+        };
+
+        println!("email: {}, title: {}", email, title);
     }
 
     Ok(())
